@@ -7,6 +7,9 @@ const isListening = ref(false)
 const statusMessage = ref('初始化中...')
 const showHistory = ref(false)
 const records = ref([])
+const installPrompt = ref(null)
+const showInstallBtn = ref(false)
+const isDev = ref(import.meta.env.DEV) // 开发环境标识
 
 // 初始化 - 检查 NFC 支持
 onMounted(async () => {
@@ -18,6 +21,44 @@ onMounted(async () => {
   } else {
     nfcSupported.value = false
     statusMessage.value = '⚠️ 当前设备不支持 NFC 打卡'
+  }
+  
+  // 监听 PWA 安装提示
+  window.addEventListener('beforeinstallprompt', (e) => {
+    console.log('✅ beforeinstallprompt 事件触发')
+    e.preventDefault()
+    installPrompt.value = e
+    showInstallBtn.value = true
+  })
+  
+  // 监听安装成功事件
+  window.addEventListener('appinstalled', () => {
+    console.log('✅ PWA 安装成功')
+    showInstallBtn.value = false
+    installPrompt.value = null
+  })
+  
+  // 开发环境：检测 PWA 配置
+  if (isDev.value) {
+    console.log('🔍 PWA 配置检查:')
+    console.log('- Service Worker 支持:', 'serviceWorker' in navigator)
+    console.log('- beforeinstallprompt 监听已设置')
+    
+    // 延迟检查是否触发了事件
+    setTimeout(() => {
+      if (!installPrompt.value) {
+        console.warn('⚠️ beforeinstallprompt 未触发，可能原因:')
+        console.warn('1. 已安装该 PWA')
+        console.warn('2. 不满足安装条件（需 HTTPS 或已注册 SW）')
+        console.warn('3. 用户参与度不足（需访问2次，间隔5分钟）')
+        console.warn('4. 在开发环境中，Chrome 可能不会自动触发')
+        console.warn('\n💡 解决方案:')
+        console.warn('- 打开 DevTools > Application > Manifest，检查配置')
+        console.warn('- 打开 DevTools > Application > Service Workers，确认已注册')
+        console.warn('- 运行 Lighthouse 审计查看 PWA 评分')
+        console.warn('- 或直接部署到 Vercel 测试')
+      }
+    }, 3000)
   }
 })
 
@@ -143,6 +184,49 @@ const groupedRecords = computed(() => {
 function toggleHistory() {
   showHistory.value = !showHistory.value
 }
+
+// 安装应用
+async function installApp() {
+  if (!installPrompt.value) {
+    console.error('❌ installPrompt 为空，安装事件未捕获')
+    
+    // 开发环境提示
+    if (isDev.value) {
+      alert('⚠️ 安装事件未触发\n\n请检查:\n1. Chrome DevTools > Application > Manifest\n2. Service Worker 是否已注册\n3. 尝试构建后访问: npm run build && npm run preview')
+    }
+    return
+  }
+  
+  try {
+    const result = await installPrompt.value.prompt()
+    console.log('✅ 安装结果:', result.outcome)
+    
+    if (result.outcome === 'accepted') {
+      console.log('✅ 用户接受安装')
+    } else {
+      console.log('❌ 用户拒绝安装')
+    }
+  } catch (err) {
+    console.error('❌ 安装失败:', err)
+  }
+  
+  installPrompt.value = null
+  showInstallBtn.value = false
+}
+
+// 检查 PWA 安装状态
+function checkPWAStatus() {
+  console.log('📊 PWA 状态检查:')
+  console.log('- 是否为独立模式:', window.matchMedia('(display-mode: standalone)').matches)
+  console.log('- installPrompt 是否存在:', !!installPrompt.value)
+  console.log('- Service Worker 状态:', navigator.serviceWorker?.controller ? '已激活' : '未激活')
+}
+
+// 开发环境：暴露到 window
+if (isDev.value) {
+  window.checkPWAStatus = checkPWAStatus
+  console.log('💡 调试命令: window.checkPWAStatus()')
+}
 </script>
 
 <template>
@@ -164,6 +248,31 @@ function toggleHistory() {
         <div class="tip-text">将门禁卡靠近设备背面</div>
         <div class="tip-subtext">上午刷卡记为上班 / 下午刷卡记为下班</div>
       </div>
+      
+      <!-- 开发环境调试面板 -->
+      <div v-if="isDev" class="debug-panel">
+        <div class="debug-title">🔍 PWA 调试面板</div>
+        <div class="debug-item">
+          <span class="debug-label">beforeinstallprompt:</span>
+          <span :class="installPrompt ? 'debug-success' : 'debug-error'">
+            {{ installPrompt ? '✅ 已捕获' : '❌ 未触发' }}
+          </span>
+        </div>
+        <div class="debug-item">
+          <span class="debug-label">Service Worker:</span>
+          <span class="debug-info">{{ 'serviceWorker' in navigator ? '✅ 支持' : '❌ 不支持' }}</span>
+        </div>
+        <div class="debug-tips">
+          💡 在 DevTools 中:<br>
+          1. Application > Manifest 检查配置<br>
+          2. Application > Service Workers 检查注册<br>
+          3. Console 输入 window.checkPWAStatus()
+        </div>
+      </div>
+      
+      <button v-if="showInstallBtn" class="install-btn" @click="installApp">
+        📥 安装到桌面
+      </button>
       
       <button v-if="nfcSupported" class="history-btn" @click="toggleHistory">
         查看记录
@@ -289,6 +398,83 @@ function toggleHistory() {
   color: #969799;
 }
 
+/* 调试面板 */
+.debug-panel {
+  background: #fffbe8;
+  border: 1px solid #ffe58f;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 16px;
+  font-size: 13px;
+}
+
+.debug-title {
+  font-weight: 600;
+  color: #d48806;
+  margin-bottom: 8px;
+}
+
+.debug-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid #fff7e6;
+}
+
+.debug-item:last-of-type {
+  border-bottom: none;
+  margin-bottom: 8px;
+}
+
+.debug-label {
+  color: #8c8c8c;
+}
+
+.debug-success {
+  color: #52c41a;
+  font-weight: 500;
+}
+
+.debug-error {
+  color: #ff4d4f;
+  font-weight: 500;
+}
+
+.debug-info {
+  color: #1890ff;
+  font-weight: 500;
+}
+
+.debug-tips {
+  background: #fff;
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #595959;
+}
+
+/* 安装按钮 */
+.install-btn {
+  width: 100%;
+  background: #07c160;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 14px;
+  font-size: 16px;
+  font-weight: 500;
+  margin-top: 24px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.2s;
+}
+
+.install-btn:active {
+  opacity: 0.8;
+}
+
 /* 查看记录按钮 */
 .history-btn {
   width: 100%;
@@ -299,7 +485,7 @@ function toggleHistory() {
   padding: 14px;
   font-size: 16px;
   font-weight: 500;
-  margin-top: 24px;
+  margin-top: 12px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   transition: opacity 0.2s;
